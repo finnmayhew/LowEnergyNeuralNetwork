@@ -1,3 +1,6 @@
+# In the process of modification by Finn Mayhew, Summer 2021
+#  to index over the Gen2 sunflower
+
 #############################
 # Read IceCube files and create training file (hdf5)
 #   Modified from code written by Claudio Kopper
@@ -10,7 +13,7 @@
 #       -r reco: flag to save Level5p pegleg reco output (to compare)
 #       --emax: maximum energy saved (60 is default, so keep all < 60 GeV)
 #       --cleaned: if you want to pull from SRTTWOfflinePulsesDC, instead of SplitInIcePulses
-#       --true_name: string of key to check true particle info from against I3MCTree[0] 
+#       --true_name: string of key to check true particle info from against I3MCTree[0]
 ##############################
 
 import numpy as np
@@ -86,28 +89,7 @@ def get_observable_features(frame,low_window=-500,high_window=4000):
     else:
         ice_pulses = dataclasses.I3RecoPulseSeriesMap.from_frame(frame,'SplitInIcePulses')
 
-    #First cut: Check if there are 8 cleaned pulses > 0.25 PE
-    cleaned_ice_pulses = dataclasses.I3RecoPulseSeriesMap.from_frame(frame,'SRTTWOfflinePulsesDC')
-    count_cleaned_pulses = 0
-    clean_pulses_8_or_more = False
-    for omkey, pulselist in cleaned_ice_pulses:
-        if clean_pulses_8_or_more == True:
-            break
-        for pulse in pulselist:
 
-            a_charge = pulse.charge
-
-            #Cut any pulses < 0.25 PE
-            if a_charge < 0.25:
-                continue
-
-            #Count number pulses > 0.25 PE in event
-            count_cleaned_pulses +=1
-            if count_cleaned_pulses >=8:
-                clean_pulses_8_or_more = True
-                break
-                
-    
     #Look inside ice pulses and get stats on charges and time
     # DC = deep core which is certain strings/DOMs in IceCube
     store_string = []
@@ -115,12 +97,13 @@ def get_observable_features(frame,low_window=-500,high_window=4000):
     #IC_near_DC_strings = [26, 27, 35, 36, 37, 45, 46]
     ICstrings = len(IC_near_DC_strings)
     DC_strings = [79, 80, 81, 82, 83, 84, 85, 86]
+    G2_strings = list(range(1001,1123)) # FRM: G2_strings = [1001, 1001, ..., 1122], 122 strings
 
     #Five summary variables: sum charges, time first pulse, Time of last pulse, Charge weighted mean time of pulses, Charge weighted standard deviation of pulse times
     array_DC = np.zeros([len(DC_strings),60,5]) # [string, dom_index, charge & time summary]
     array_IC_near_DC = np.zeros([len(IC_near_DC_strings),60,5]) # [string, dom_index, charge & time summary]
+    array_G2 = np.zeros([len(G2_strings),80,5]) # FRM: 80 DOMs per Gen2 string
     initial_stats = np.zeros([4])
-    num_pulses_per_dom = np.zeros([len(DC_strings),60,1])
     count_outside = 0
     charge_outside = 0
     count_inside = 0
@@ -130,17 +113,17 @@ def get_observable_features(frame,low_window=-500,high_window=4000):
     # dataclasses.TriggerKey(source, ttype, config_id)
     triggers = frame['I3TriggerHierarchy']
     trigger_time = None
-    num_extra_DC_triggers = 0
+    num_extra_G2_triggers = 0 # FRM: changed from num_extra_DC_triggers
     for trig in triggers:
         key_str = str(trig.key)
         s = key_str.strip('[').strip(']').split(':')
         if len(s) > 2:
             config_id = int(s[2])
-            if config_id == 1011:
+            if config_id == 1003: # FRM: changed from 1011, now corresopnds to the Gen2 trigger
                 if trigger_time:
-                    num_extra_DC_triggers +=1
+                    num_extra_G2_triggers +=1 # FRM: changed from num_extra_DC_triggers
                 trigger_time = trig.time
-                
+
     if trigger_time == None:
         shift_time_by = 0
     else:
@@ -149,152 +132,106 @@ def get_observable_features(frame,low_window=-500,high_window=4000):
     #Start by making all times negative shift time (to distinguish null from 0)
     array_DC[...,1:] = -20000
     array_IC_near_DC[...,1:] = -20000
-    
-    #Only go through pulse series if we're keeping it    
-    if clean_pulses_8_or_more == True:
-        for omkey, pulselist in ice_pulses:
-            dom_index =  omkey.om-1
-            string_val = omkey.string
-            timelist = []
-            chargelist = []
+    array_G2[...,1:] = -20000 # FRM: added line
 
-            DC_flag = False
-            IC_near_DC_flag = False
+    for omkey, pulselist in ice_pulses:
+        dom_index =  omkey.om-1
+        string_val = omkey.string
+        timelist = []
+        chargelist = []
 
-            
-            for pulse in pulselist:
-                
-                charge = pulse.charge
-
-                #Cut any pulses < 0.25 PE
-                if charge < 0.25:
-                    continue
-                
-                # Quantize pulse chargest to make all seasons appear the same
-                quanta = 0.05
-                charge = (np.float64(charge) // quanta) * quanta + quanta / 2.
-
-                if string_val not in store_string:
-                    store_string.append(string_val)
-
-                # Check IceCube near DeepCore DOMs
-                if( (string_val in IC_near_DC_strings) and dom_index<60):
-                    string_index = IC_near_DC_strings.index(string_val)
-                    timelist.append(pulse.time)
-                    chargelist.append(charge)
-                    IC_near_DC_flag = True
-
-                # Check DeepCore DOMS
-                elif ( (string_val in DC_strings) and dom_index<60): #dom_index >=10
-                    string_index = DC_strings.index(string_val)
-                    timelist.append(pulse.time)
-                    chargelist.append(charge)
-                    DC_flag = True
+        DC_flag = False
+        IC_near_DC_flag = False
+        G2_flag = False # FRM: added line
 
 
-                else:
-                    count_outside +=1
-                    charge_outside += charge
-                    
-            if DC_flag == True or IC_near_DC_flag == True:
+        for pulse in pulselist:
 
-                charge_array = np.array(chargelist)
-                time_array = np.array(timelist)
-                time_array = [ (t_value - shift_time_by) for t_value in time_array ]
-                time_shifted = [ (t_value - time_array[0]) for t_value in time_array ]
-                time_shifted = np.array(time_shifted)
-                mask_500 = time_shifted<500
-                mask_100 = time_shifted<100
+            charge = pulse.charge
 
-                # Remove pulses so only those in certain time window are saved
-                original_num_pulses = len(timelist)
-                time_array_in_window = list(time_array)
-                charge_array_in_window = list(charge_array)
-                for time_index in range(0,original_num_pulses):
-                    time_value =  time_array[time_index]
-                    if time_value < low_window or time_value > high_window:
-                        time_array_in_window.remove(time_value)
-                        charge_array_in_window.remove(charge_array[time_index])
-                charge_array = np.array(charge_array_in_window)
-                time_array = np.array(time_array_in_window)
-                assert len(charge_array)==len(time_array), "Mismatched pulse time and charge"
-                if len(charge_array) == 0:
-                    continue
+            #Cut any pulses < 0.25 PE
+            if charge < 0.25:
+                continue
 
-                #Original Stats
-                count_inside += len(chargelist)
-                charge_inside += sum(chargelist)
+            # Quantize pulse chargest to make all seasons appear the same
+            quanta = 0.05
+            charge = (np.float64(charge) // quanta) * quanta + quanta / 2.
 
-                # Check that pulses are sorted in time
-                for i_t,time in enumerate(time_array):
-                    assert time == sorted(time_array)[i_t], "Pulses are not pre-sorted!"
+            if string_val not in store_string:
+                store_string.append(string_val)
 
-                # Charge weighted mean and stdev
-                weighted_avg_time = np.average(time_array,weights=charge_array)
-                weighted_std_time = np.sqrt( np.average((time_array - weighted_avg_time)**2, weights=charge_array) )
+            # Check IceCube near DeepCore DOMs
+            if( (string_val in IC_near_DC_strings) and dom_index<60):
+                string_index = IC_near_DC_strings.index(string_val)
+                timelist.append(pulse.time)
+                chargelist.append(charge)
+                IC_near_DC_flag = True
+
+            # Check DeepCore DOMS
+            elif ( (string_val in DC_strings) and dom_index<60): #dom_index >=10
+                string_index = DC_strings.index(string_val)
+                timelist.append(pulse.time)
+                chargelist.append(charge)
+                DC_flag = True
+
+            # FRM: added block
+            elif ( (string_val in G2_strings) and dom_index<80): # FRM: remember to change to if when removing both above blocks
+                string_index = G2_strings.index(string_val)
+                timelist.append(pulse.time)
+                chargelist.append(charge)
+                G2_flag = True
+
+            else:
+                count_outside +=1
+                charge_outside += charge
+
+        if DC_flag == True or IC_near_DC_flag == True or G2_flag == True: # FRM: added last condition
+
+            charge_array = np.array(chargelist)
+            time_array = np.array(timelist)
+            time_array = [ (t_value - shift_time_by) for t_value in time_array ]
+            time_shifted = [ (t_value - time_array[0]) for t_value in time_array ]
+            time_shifted = np.array(time_shifted)
+            mask_500 = time_shifted<500
+            mask_100 = time_shifted<100
+
+            #Original Stats
+            count_inside += len(chargelist)
+            charge_inside += sum(chargelist)
+
+            # Check that pulses are sorted in time
+            for i_t,time in enumerate(time_array):
+                assert time == sorted(time_array)[i_t], "Pulses are not pre-sorted!"
+
+            # Charge weighted mean and stdev
+            weighted_avg_time = np.average(time_array,weights=charge_array)
+            weighted_std_time = np.sqrt( np.average((time_array - weighted_avg_time)**2, weights=charge_array) )
 
 
-            if DC_flag == True:
-                array_DC[string_index,dom_index,0] = sum(chargelist)
-                array_DC[string_index,dom_index,1] = time_array[0]
-                array_DC[string_index,dom_index,2] = time_array[-1]
-                array_DC[string_index,dom_index,3] = weighted_avg_time
-                array_DC[string_index,dom_index,4] = weighted_std_time
-                
-                num_pulses_per_dom[string_index,dom_index,0] = len(chargelist)
-            
-            if IC_near_DC_flag == True:
-                array_IC_near_DC[string_index,dom_index,0] = sum(chargelist)
-                array_IC_near_DC[string_index,dom_index,1] = time_array[0]
-                array_IC_near_DC[string_index,dom_index,2] = time_array[-1]
-                array_IC_near_DC[string_index,dom_index,3] = weighted_avg_time
-                array_IC_near_DC[string_index,dom_index,4] = weighted_std_time
+        if DC_flag == True:
+            array_DC[string_index,dom_index,0] = sum(chargelist)
+            array_DC[string_index,dom_index,1] = time_array[0]
+            array_DC[string_index,dom_index,2] = time_array[-1]
+            array_DC[string_index,dom_index,3] = weighted_avg_time
+            array_DC[string_index,dom_index,4] = weighted_std_time
+
+        if IC_near_DC_flag == True:
+            array_IC_near_DC[string_index,dom_index,0] = sum(chargelist)
+            array_IC_near_DC[string_index,dom_index,1] = time_array[0]
+            array_IC_near_DC[string_index,dom_index,2] = time_array[-1]
+            array_IC_near_DC[string_index,dom_index,3] = weighted_avg_time
+            array_IC_near_DC[string_index,dom_index,4] = weighted_std_time
+
+        # FRM: added block, and this is where I'd add the extra variables (5 -> 9)
+        if G2_flag == True:
+            array_G2[string_index,dom_index,0] = sum(chargelist)
+            array_G2[string_index,dom_index,1] = time_array[0]
+            array_G2[string_index,dom_index,2] = time_array[-1]
+            array_G2[string_index,dom_index,3] = weighted_avg_time
+            array_G2[string_index,dom_index,4] = weighted_std_time
 
 
-        initial_stats[0] = count_outside
-        initial_stats[1] = charge_outside
-        initial_stats[2] = count_inside
-        initial_stats[3] = charge_inside
-        
-    return array_DC, array_IC_near_DC, initial_stats, num_pulses_per_dom, trigger_time, num_extra_DC_triggers, ICstrings, clean_pulses_8_or_more
-
-def apply_transform(features_DC, features_IC, output_labels=None, energy_factor=100., track_factor=200.,transform="MaxAbs",transform_output=True):
-    from scaler_transformations import TransformData, new_transform
-    static_stats = [25., 4000., 4000., 4000., 2000.]
-    low_stat_DC = static_stats
-    high_stat_DC = static_stats
-    low_stat_IC = static_stats
-    high_stat_IC = static_stats
-    input_transform_factors = np.array([high_stat_DC,high_stat_IC])
-
-    features_DC = new_transform(features_DC)
-    features_DC = TransformData(features_DC, low_stats=low_stat_DC, high_stats=high_stat_DC, scaler=transform)
-    features_IC = new_transform(features_IC)
-    features_IC = TransformData(features_IC, low_stats=low_stat_IC, high_stats=high_stat_IC, scaler=transform)
-
-    output_label_names = np.array(["Energy", "Zenith", "Aziuth", "Time", "X", "Y", "Z", "Track", "IsTrack", "Flavor", "IsAntineutrino", "IsCC"])
-    output_names = np.array(output_label_names)
-    output_transform_factors = np.ones((len(output_names)))
-    if transform_output:
-
-        # switch track and azimuth positions
-        track = np.copy(output_labels[:,7])
-        azimuth = np.copy(output_labels[:,2])
-
-        #Make changes to output_labels array
-        output_labels[:,0] = output_labels[:,0]/float(energy_factor) #energy
-        output_labels[:,1] = np.cos(output_labels[:,1]) #cos zenith
-        output_labels[:,2] = track/float(track_factor) #MAKE TRACK THIRD INPUT
-        output_labels[:,7] = azimuth #MOVE AZIMUTH TO WHERE TRACK WAS
-
-        #Track changes in output arrarys
-        output_label_names[1] = "Cosine Zenith"
-        output_label_names[2] = "Track"
-        output_label_names[7] = "Azimuth"
-        output_transform_factors[0] = energy_factor
-        output_transform_factors[2] = track_factor
-
-        return features_DC, features_IC, output_labels, output_label_names, input_transform_factors, output_transform_factors
+    return array_DC, array_IC_near_DC, array_G2, initial_stats, trigger_time, num_extra_G2_triggers, ICstrings # FRM: added array_G2, changed num_extra_DC_triggers to num_extra_G2_triggers
 
 def read_files(filename_list, use_old_reco, check_filters, true_name, reco_type):
     """
@@ -304,10 +241,10 @@ def read_files(filename_list, use_old_reco, check_filters, true_name, reco_type)
     Returns:
         output_features_DC = dict with input observable features from the DC strings
         output_features_IC = dict with input observable features from the IC strings
-        output_labels = dict with output labels  (energy, zenith, azimith, time, x, y, z, 
+        output_labels = dict with output labels  (energy, zenith, azimith, time, x, y, z,
                         tracklength, isTrack, flavor ID, isAntiNeutrino, isCC)
         output_reco_labels = dict with PegLeg output labels (energy, zenith, azimith, time, x, y, z)
-        output_initial_stats = array with info on number of pulses and sum of charge "inside" the strings used 
+        output_initial_stats = array with info on number of pulses and sum of charge "inside" the strings used
                                 vs. "outside", i.e. the strings not used (pulse count outside, charge outside,
                                 pulse count inside, charge inside) for finding statistics
         output_num_pulses_per_dom = array that only holds the number of pulses seen per DOM (finding statistics)
@@ -315,16 +252,15 @@ def read_files(filename_list, use_old_reco, check_filters, true_name, reco_type)
     """
     output_features_DC = []
     output_features_IC = []
+    output_features_G2 = [] # FRM: added line
     output_labels = []
     output_reco_labels = []
     output_initial_stats = []
-    output_num_pulses_per_dom = []
     output_trigger_times = []
     output_weights = []
     isOther_count = 0
     passed_all_filters = 0
     skipped_triggers = 0
-    probnu = 0
     less_8_hits = 0
     failed_fit = 0
     failed_iter = 0
@@ -341,17 +277,17 @@ def read_files(filename_list, use_old_reco, check_filters, true_name, reco_type)
 
                 if header.sub_event_stream != "InIceSplit":
                     continue
-            
+
                 # ALWAYS USE EVENTS THAT PASSES CLEANING!
                 #if use_cleaned_pulses:
                 #try:
                 #    cleaned = frame["SRTTWOfflinePulsesDC"]
                 #except:
                 #    continue
-                
+
                 # Check filters
                 if check_filters:
-                    DCFilter = frame["FilterMask"].get("DeepCoreFilter_13").condition_passed
+                    DCFilter = frame["FilterMask"].get("DeepCoreFilter_13").condition_passed # FRM: question: what's this?
                     L3Filter = frame["L3_oscNext_bool"]
                     L4Filter = frame["L4_oscNext_bool"]
                     L5Filter = frame["L5_oscNext_bool"]
@@ -363,17 +299,17 @@ def read_files(filename_list, use_old_reco, check_filters, true_name, reco_type)
                 # GET TRUTH LABELS
                 tree = frame["I3MCTree"]
                 nu = tree[0]
-                
+
                 if true_name:
                     nu_check = frame[true_name]
                     assert nu==nu_check,"CHECK I3MCTree[0], DOES NOT MATCH TRUTH IN GIVEN KEY"
-                
+
                 if (nu.type != dataclasses.I3Particle.NuMu and nu.type != dataclasses.I3Particle.NuMuBar\
                     and nu.type != dataclasses.I3Particle.NuE and nu.type != dataclasses.I3Particle.NuEBar\
                     and nu.type != dataclasses.I3Particle.NuTau and nu.type != dataclasses.I3Particle.NuTauBar):
                     print("PARTICLE IS NOT NEUTRUNO!! Skipping event...")
-                    continue           
- 
+                    continue
+
                 nu_x = nu.pos.x
                 nu_y = nu.pos.y
                 nu_z = nu.pos.z
@@ -381,18 +317,17 @@ def read_files(filename_list, use_old_reco, check_filters, true_name, reco_type)
                 nu_azimuth = nu.dir.azimuth
                 nu_energy = nu.energy
                 nu_time = nu.time
-                isTrack = frame['I3MCWeightDict']['InteractionType']==1.   # it is a cascade with a trac
+                isTrack = frame['I3MCWeightDict']['InteractionType']==1.   # it is a cascade with a trac # FRM: remove these two lines, or set them to False, or similar — check throught the code
                 isCascade = frame['I3MCWeightDict']['InteractionType']==2. # it is just a cascade
-                isCC = frame['I3MCWeightDict']['InteractionType']==1.
+                isCC = frame['I3MCWeightDict']['InteractionType']==1. # FRM: I'll need to remove the dependency on weights, see note in notes 
                 isNC = frame['I3MCWeightDict']['InteractionType']==2.
                 isOther = not isCC and not isNC
-                L4_NoiseClassifier_ProbNu = frame['L4_NoiseClassifier_ProbNu'].value
-               
+
                 # Find EM equivalent energy
                 total_daughter_energy = 0
                 em_equiv_daughter_energy = 0
                 for particle in tree.get_daughters(nu.id):
-                    # Do not scale neutrinos 
+                    # Do not scale neutrinos
                     if (particle.type == dataclasses.I3Particle.NuMu or particle.type == dataclasses.I3Particle.NuMuBar \
                     or particle.type == dataclasses.I3Particle.NuE or particle.type == dataclasses.I3Particle.NuEBar\
                     or particle.type == dataclasses.I3Particle.NuTau or particle.type == dataclasses.I3Particle.NuTauBar):
@@ -403,7 +338,7 @@ def read_files(filename_list, use_old_reco, check_filters, true_name, reco_type)
                         EM_equivalent_scale = 1.0
                     else:
                         EM_equivalent_scale = sim_services.ShowerParameters(particle.type, particle.energy).emScale
-                    
+
                     total_daughter_energy += particle.energy
                     em_equiv_daughter_energy += particle.energy*EM_equivalent_scale
 
@@ -434,7 +369,7 @@ def read_files(filename_list, use_old_reco, check_filters, true_name, reco_type)
                             #reco_energy =0
                             #reco_time = 0
                             #reco_zenith =0
-                            #reco_azimuth = 0 
+                            #reco_azimuth = 0
                             #reco_x = 0
                             #reco_y = 0
                             #reco_z = 0
@@ -467,7 +402,7 @@ def read_files(filename_list, use_old_reco, check_filters, true_name, reco_type)
                     continue
 
                     #print(frame['I3MCWeightDict'])
-                
+
                 # set track classification for numu CC only
                 if ((nu.type == dataclasses.I3Particle.NuMu or nu.type == dataclasses.I3Particle.NuMuBar) and isCC):
                     isTrack = True
@@ -481,7 +416,7 @@ def read_files(filename_list, use_old_reco, check_filters, true_name, reco_type)
                     isTrack = False
                     isCascade = True
                     track_length = 0
-            
+
                 #Save flavor and particle type (anti or not)
                 if (nu.type == dataclasses.I3Particle.NuMu):
                     neutrino_type = 14
@@ -504,23 +439,13 @@ def read_files(filename_list, use_old_reco, check_filters, true_name, reco_type)
                 else:
                     print("Do not know first particle type in MCTree, should be neutrino, skipping this event")
                     continue
-                
-                DC_array, IC_near_DC_array,initial_stats,num_pulses_per_dom, trig_time, extra_triggers, ICstrings, has_8_hits  = get_observable_features(frame)
+
+                DC_array, IC_near_DC_array, G2_array, initial_stats, trig_time, extra_triggers, ICstrings, has_8_hits  = get_observable_features(frame) # FRM: added G2_array
 
                 # Check if there were multiple SMT3 triggers or no SMT3 triggers
                 # Skip event if so
                 if extra_triggers > 0 or trig_time == None:
                     skipped_triggers +=1
-                    continue
-                
-                # Remove events with less than 8 hits
-                if has_8_hits == False:
-                    less_8_hits += 1
-                    #print("event has less than 8 hits")
-                    continue
-
-                if L4_NoiseClassifier_ProbNu < 0.95:
-                    probnu +=1
                     continue
 
                 # regression variables
@@ -530,31 +455,32 @@ def read_files(filename_list, use_old_reco, check_filters, true_name, reco_type)
                 if use_old_reco:
                     output_reco_labels.append( np.array([ float(reco_energy), float(reco_zenith), float(reco_azimuth), float(reco_time), float(reco_x), float(reco_y), float(reco_z), float(reco_length), float(reco_track_energy), float(reco_casc_energy), float(reco_em_casc_energy), float(reco_zenith) ]) )
 
+                # FRM: get rid of this block, I don't use weights — but do save the headers instead
                 #Save weights
-                #[File, RunID, SubrunID, EventID, NEvents, OneWeight, NormalizedOneWeight, GENIEWeight, InteractionProbabilityWeight, SinglePowerLawFlux_flux => 0.00154532, SinglePowerLawFlux_index, SinglePowerLawFlux_norm, SinglePowerLawFlux_weight, TotalInteractionProbabilityWeight, weight] 
+                #[File, RunID, SubrunID, EventID, NEvents, OneWeight, NormalizedOneWeight, GENIEWeight, InteractionProbabilityWeight, SinglePowerLawFlux_flux => 0.00154532, SinglePowerLawFlux_index, SinglePowerLawFlux_norm, SinglePowerLawFlux_weight, TotalInteractionProbabilityWeight, weight]
                 weights = frame['I3MCWeightDict']
-                #from dragon_weights import weight_frame 
+                #from dragon_weights import weight_frame
                 if reco_type == "pegleg":
                     #the_weight = weight_frame(frame)
                     output_weights.append( np.array([ float(header.run_id), float(header.sub_run_id), float(header.event_id), float(weights["NEvents"]), float(weights["OneWeight"]),  float(weights["GENIEWeight"]), float(weights["PowerLawIndex"]), float(0.3)]) ) #, float(the_weight)  ]) )
                 else:
                     output_weights.append( np.array([ float(header.run_id), float(header.sub_run_id), float(header.event_id), float(weights["NEvents"]), float(weights["OneWeight"]), float(weights["GENIEWeight"]),float(weights["PowerLawIndex"]), float(weights["gen_ratio"]), float(weights["weight"]) ]) )
             # close the input file once we are done
-        
+
 
                 output_features_DC.append(DC_array)
                 output_features_IC.append(IC_near_DC_array)
+                output_features_G2.append(G2_array) # FRM: added line
                 output_initial_stats.append(initial_stats)
-                output_num_pulses_per_dom.append(num_pulses_per_dom)
                 output_trigger_times.append(trig_time)
 
         del event_file
 
     output_features_DC=np.asarray(output_features_DC)
     output_features_IC=np.asarray(output_features_IC)
+    output_features_G2=np.asarray(output_features_G2) # FRM: added line
     output_labels=np.asarray(output_labels)
     output_initial_stats=np.asarray(output_initial_stats)
-    output_num_pulses_per_dom=np.asarray(output_num_pulses_per_dom)
     output_trigger_times = np.asarray(output_trigger_times)
     output_weights = np.asarray(output_weights)
     if use_old_reco:
@@ -564,16 +490,14 @@ def read_files(filename_list, use_old_reco, check_filters, true_name, reco_type)
         print("Skipped %i events due to no or double triggers"%skipped_triggers)
     if less_8_hits > 0:
         print("Skipped %i events due to less than 8 hits"%less_8_hits)
-    if probnu > 0:
-        print("Skipped %i events due to ProbNu < 0.95"%probnu)
     if failed_fit > 0:
         print("Skipped %i events due to failed retro fit"%failed_fit)
     if failed_iter > 0:
         print("Skipped %i events due to retro iterations < 9"%failed_iter)
 
-        
 
-    return output_features_DC, output_features_IC, output_labels, output_reco_labels, output_initial_stats, output_num_pulses_per_dom, output_trigger_times, output_weights, ICstrings
+
+    return output_features_DC, output_features_IC, output_features_G2, output_labels, output_reco_labels, output_initial_stats, output_trigger_times, output_weights, ICstrings # FRM: added output_features_G2
 
 
 #Construct list of filenames
@@ -583,9 +507,7 @@ event_file_names = sorted(glob.glob(input_file))
 assert event_file_names,"No files loaded, please check path."
 time_start=time.time()
 
-features_DC, features_IC, labels, reco_labels, initial_stats, num_pulses_per_dom, trigger_times, weights, ICstrings = read_files(event_file_names, use_old_reco, check_filters, true_name, reco_type)
-
-features_DC, features_IC, labels, output_label_names, input_transform_factors, output_transform_factors = apply_transform(features_DC, features_IC, output_labels=labels, energy_factor=efactor, track_factor=tfactor)
+features_DC, features_IC, features_G2, labels, reco_labels, initial_stats, trigger_times, weights, ICstrings = read_files(event_file_names, use_old_reco, check_filters, true_name, reco_type) # FRM: added features_G2
 
 time_end=time.time()
 print("Total time: %f"%(time_end-time_start))
@@ -604,11 +526,11 @@ output_path = output_dir + output_name + "_transformed_IC" + str(ICstrings) + nu
 f = h5py.File(output_path, "w")
 f.create_dataset("features_DC", data=features_DC)
 f.create_dataset("features_IC", data=features_IC)
+f.create_dataset("features_G2", data=features_G2) # FRM: added line
 f.create_dataset("labels", data=labels)
 if use_old_reco:
     f.create_dataset("reco_labels", data=reco_labels)
 f.create_dataset("initial_stats", data=initial_stats)
-f.create_dataset("num_pulses_per_dom", data=num_pulses_per_dom)
 f.create_dataset("trigger_times",data=trigger_times)
 f.create_dataset("weights",data=weights)
 f.attrs['output_label_names'] = [a.encode('utf8') for a in output_label_names]
