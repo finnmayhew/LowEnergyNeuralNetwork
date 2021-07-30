@@ -379,7 +379,7 @@ def read_files(filename_list, check_filters, true_name, reco_type):
                     print("Do not know first particle type in MCTree, should be neutrino, skipping this event")
                     continue
 
-                DC_array, IC_near_DC_array, G2_array, initial_stats, trig_time, extra_triggers, ICstrings, has_8_hits  = get_observable_features(frame) # FRM: added G2_array
+                DC_array, IC_near_DC_array, G2_array, initial_stats, trig_time, extra_triggers, ICstrings = get_observable_features(frame) # FRM: added G2_array
 
                 # Check if there were multiple SMT3 triggers or no SMT3 triggers
                 # Skip event if so
