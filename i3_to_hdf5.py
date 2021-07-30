@@ -37,8 +37,6 @@ parser.add_argument("-n", "--name",default=None,
                     dest="output_name",help="name for output file (no path)")
 parser.add_argument("-o", "--outdir",type=str,default='/mnt/scratch/micall12/training_files/',
                     dest="output_dir", help="path of ouput file")
-parser.add_argument("-r", "--reco",type=str,default="False",
-                    dest="reco", help="True if using Level5p or have a pegleg reco")
 parser.add_argument("--reco_type",type=str,default="retro",
                     dest="reco_type", help="Options are pegleg or retro")
 parser.add_argument("--efactor",type=float,default=100.0,
@@ -60,13 +58,6 @@ efactor=args.efactor
 tfactor=args.tfactor
 true_name = args.true_name
 reco_type = args.reco_type
-if args.reco == 'True' or args.reco == 'true':
-    use_old_reco = True
-    print("Expecting old reco values in files, pulling from %s frames"%reco_type)
-    if reco_type == "retro":
-        print("CUTTING OUT ALL FIT FAILURES, INCLUDING ITERATIONS < 9")
-else:
-    use_old_reco = False
 if args.cleaned == "True" or args.cleaned == "true":
     use_cleaned_pulses = True
 else:
@@ -233,7 +224,7 @@ def get_observable_features(frame,low_window=-500,high_window=4000):
 
     return array_DC, array_IC_near_DC, array_G2, initial_stats, trigger_time, num_extra_G2_triggers, ICstrings # FRM: added array_G2, changed num_extra_DC_triggers to num_extra_G2_triggers
 
-def read_files(filename_list, use_old_reco, check_filters, true_name, reco_type):
+def read_files(filename_list, check_filters, true_name, reco_type):
     """
     Read list of files, make sure they pass L5 cuts, create truth labels
     Receives:
@@ -343,58 +334,6 @@ def read_files(filename_list, use_old_reco, check_filters, true_name, reco_type)
                     em_equiv_daughter_energy += particle.energy*EM_equivalent_scale
 
 
-                if use_old_reco:
-
-                    if reco_type == "retro":
-                        fit_success = ( "retro_crs_prefit__fit_status" in frame ) and frame["retro_crs_prefit__fit_status"] == 0
-                        if fit_success:
-                            reco_iterations = frame['retro_crs_prefit__iterations'].value
-                            if reco_iterations > 9:
-                                reco_energy = frame['L7_reconstructed_total_energy'].value
-                                reco_time = frame['L7_reconstructed_time'].value
-                                reco_zenith = frame['L7_reconstructed_zenith'].value
-                                reco_azimuth = frame['L7_reconstructed_azimuth'].value
-                                reco_x = frame['L7_reconstructed_vertex_x'].value
-                                reco_y = frame['L7_reconstructed_vertex_y'].value
-                                reco_z = frame['L7_reconstructed_vertex_z'].value
-                                reco_length = frame['L7_reconstructed_track_length'].value
-                                reco_casc_energy = frame['L7_reconstructed_cascade_energy'].value
-                                reco_track_energy = frame['L7_reconstructed_track_energy'].value
-                                reco_em_casc_energy = frame['L7_reconstructed_em_cascade_energy'].value
-                            else:
-                                failed_iter += 1
-                        else:
-                            failed_fit += 1
-                            continue
-                            #reco_energy =0
-                            #reco_time = 0
-                            #reco_zenith =0
-                            #reco_azimuth = 0
-                            #reco_x = 0
-                            #reco_y = 0
-                            #reco_z = 0
-                            #reco_length =0
-                            #reco_casc_energy = 0
-                            #reco_track_energy = 0
-                            #reco_em_casc_energy = 0
-
-                    if reco_type == "pegleg":
-                        if not frame.Has('IC86_Dunkman_L6_PegLeg_MultiNest8D_NumuCC'):
-                            continue
-                        reco_nu = frame['IC86_Dunkman_L6_PegLeg_MultiNest8D_NumuCC']
-                        reco_length = reco_nu.length
-                        reco_energy = reco_nu.energy
-                        reco_time = reco_nu.time
-                        reco_zenith = reco_nu.dir.zenith
-                        reco_azimuth = reco_nu.dir.azimuth
-                        reco_x = reco_nu.pos.x
-                        reco_y = reco_nu.pos.y
-                        reco_z = reco_nu.pos.z
-                        reco_casc_energy = frame['IC86_Dunkman_L6_PegLeg_MultiNest8D_HDCasc'].energy
-                        reco_track_energy = frame['IC86_Dunkman_L6_PegLeg_MultiNest8D_Track'].energy
-                        reco_em_casc_energy = frame['IC86_Dunkman_L6_PegLeg_MultiNest8D_EMCasc'].energy
-
-
                 # input file sanity check: this should not print anything since "isOther" should always be false
                 if isOther:
                     print("isOTHER - not Track or Cascade...skipping event...")
@@ -452,9 +391,6 @@ def read_files(filename_list, use_old_reco, check_filters, true_name, reco_type)
                 # OUTPUT: [ nu energy, nu zenith, nu azimuth, nu time, nu x, nu y, nu z, track length (0 for cascade), isTrack, flavor, type (anti = 1), isCC, nu zenith (will not be transformed to cos zenith), total daughter particle energy, total EM equivalent energy from daughter particles ]
                 output_labels.append( np.array([ float(nu_energy), float(nu_zenith), float(nu_azimuth), float(nu_time), float(nu_x), float(nu_y), float(nu_z), float(track_length), float(isTrack), float(neutrino_type), float(particle_type), float(isCC), float(nu_zenith), float(total_daughter_energy), float(em_equiv_daughter_energy) ]) )
 
-                if use_old_reco:
-                    output_reco_labels.append( np.array([ float(reco_energy), float(reco_zenith), float(reco_azimuth), float(reco_time), float(reco_x), float(reco_y), float(reco_z), float(reco_length), float(reco_track_energy), float(reco_casc_energy), float(reco_em_casc_energy), float(reco_zenith) ]) )
-
                 # FRM: get rid of this block, I don't use weights — but do save the headers instead
                 #Save weights
                 #[File, RunID, SubrunID, EventID, NEvents, OneWeight, NormalizedOneWeight, GENIEWeight, InteractionProbabilityWeight, SinglePowerLawFlux_flux => 0.00154532, SinglePowerLawFlux_index, SinglePowerLawFlux_norm, SinglePowerLawFlux_weight, TotalInteractionProbabilityWeight, weight]
@@ -483,8 +419,6 @@ def read_files(filename_list, use_old_reco, check_filters, true_name, reco_type)
     output_initial_stats=np.asarray(output_initial_stats)
     output_trigger_times = np.asarray(output_trigger_times)
     output_weights = np.asarray(output_weights)
-    if use_old_reco:
-        output_reco_labels=np.asarray(output_reco_labels)
 
     if skipped_triggers > 0:
         print("Skipped %i events due to no or double triggers"%skipped_triggers)
@@ -507,7 +441,7 @@ event_file_names = sorted(glob.glob(input_file))
 assert event_file_names,"No files loaded, please check path."
 time_start=time.time()
 
-features_DC, features_IC, features_G2, labels, reco_labels, initial_stats, trigger_times, weights, ICstrings = read_files(event_file_names, use_old_reco, check_filters, true_name, reco_type) # FRM: added features_G2
+features_DC, features_IC, features_G2, labels, reco_labels, initial_stats, trigger_times, weights, ICstrings = read_files(event_file_names, check_filters, true_name, reco_type) # FRM: added features_G2
 
 time_end=time.time()
 print("Total time: %f"%(time_end-time_start))
@@ -528,8 +462,6 @@ f.create_dataset("features_DC", data=features_DC)
 f.create_dataset("features_IC", data=features_IC)
 f.create_dataset("features_G2", data=features_G2) # FRM: added line
 f.create_dataset("labels", data=labels)
-if use_old_reco:
-    f.create_dataset("reco_labels", data=reco_labels)
 f.create_dataset("initial_stats", data=initial_stats)
 f.create_dataset("trigger_times",data=trigger_times)
 f.create_dataset("weights",data=weights)
